@@ -83,6 +83,10 @@ summ_vec <- function(v) {
   )
 }
 
+# ----------------------------------------------------------------------------
+# 1) Paths (use paths_simulated.R)
+# ----------------------------------------------------------------------------
+
 path_bdry <- PATHS$boundaries
 path_pts  <- PATHS$samples
 path_grid <- PATHS$prediction_grid
