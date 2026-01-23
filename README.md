@@ -32,7 +32,7 @@ This repository contains simulated data similar to the one used in the manuscrip
 1. **algorithms_cu.R** - Bayesian spatial analysis for Copper (Cu) contamination
 
    - Loads sample data and land use covariates
-   - Fits spatial models using INLA, MCMC, and Variational Bayes
+   - Fits spatial models using INLA, MCMC, and ADVI
    - Generates predictions on a spatial grid
 2. **algorithms_pb.R** - Bayesian spatial analysis for Lead (Pb) contamination
 
