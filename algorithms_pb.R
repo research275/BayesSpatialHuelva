@@ -31,14 +31,14 @@ crs_utm <- 25829
 resolve_target_col <- function(nms) {
   cand <- c("Pb_ppm", "Pb__ppm_", "Pb (ppm)")
   hit <- cand[cand %in% nms]
-  if (length(hit) == 0) stop("No encuentro columna de Pb (Pb_ppm / Pb__ppm_ / 'Pb (ppm)')")
+  if (length(hit) == 0) stop("Could not find Pb column (Pb_ppm / Pb__ppm_ / 'Pb (ppm)')")
   hit[1]
 }
 
 read_sf_utm <- function(path, epsg) {
   stopifnot(file.exists(path))
   x <- st_read(path, quiet = TRUE)
-  if (is.na(st_crs(x))) stop(paste0("CRS faltante en ", path))
+  if (is.na(st_crs(x))) stop(paste0("Missing CRS in ", path))
   if (st_crs(x)$epsg != epsg) x <- st_transform(x, epsg)
   x
 }
@@ -60,7 +60,7 @@ apply_scale_log1p <- function(x, scaler) {
 }
 
 chol_solve <- function(K, b) {
-  U <- chol(K)                 # U' U = K
+  U <- chol(K)
   y <- forwardsolve(t(U), b)
   x <- backsolve(U, y)
   as.numeric(x)
@@ -131,7 +131,7 @@ classes <- c("Industria","Marsh","Phospho","Urban","Agric","Refineria","Bare","P
 expected_m <- paste0("Distancia_", classes)
 present_m  <- intersect(expected_m, names(datos_huelva))
 present_g  <- intersect(classes, names(grid_huelva))
-if (!length(present_m) || !length(present_g)) stop("No hay columnas de distancia presentes.")
+if (!length(present_m) || !length(present_g)) stop("No distance columns present.")
 
 D_m <- as.data.frame(st_drop_geometry(datos_huelva[, present_m, drop = FALSE]))
 classes_use_m <- sub("^Distancia_", "", present_m)
@@ -533,8 +533,8 @@ p_vb   <- make_map(grid_huelva, "pb_vb_mean",   "Pb (ppm) – Predicción", "VB 
 
 plot_grid(p_inla, p_mcmc, p_vb, ncol = 3)
 
-cat("\nListo: grid_huelva contiene predicciones por método (mu_* y pb_*).\n")
-cat("mu_* está en escala log (log1p(Pb)); pb_* está en escala Pb (ppm).\n")
+cat("\nDone: grid_huelva contains predictions by method (mu_* and pb_*).\n")
+cat("mu_* is in log scale (log1p(Pb)); pb_* is in Pb (ppm) scale.\n")
 
 
 df_inla_fixed <- fit_inla$summary.fixed %>%
