@@ -2,7 +2,7 @@
 
 ## What is this repository for?
 
-BayesSpatialHuelva is a software for Bayesian spatial modeling and prediction of heavy metal contamination (Copper and Lead) in soil samples. It implements and compares three inference approaches: INLA (Integrated Nested Laplace Approximations), MCMC (Markov Chain Monte Carlo via Stan), and Variational Bayes (spBayes). The software computes posterior distributions for geospatial regression models with Matern covariance structures and generates exceedance probability maps.
+BayesSpatialHuelva is a software for Bayesian spatial modeling and prediction of heavy metal contamination (Copper and Lead) in soil samples. It implements and compares three inference approaches: INLA (Integrated Nested Laplace Approximations), MCMC (Markov Chain Monte Carlo), and Variational Bayes (ADVI). The software computes posterior distributions for geospatial regression models with Matern covariance structures and generates exceedance probability maps.
 
 This repository contains simulated data similar to the one used in the manuscript due to restrictions on the original dataset.
 
