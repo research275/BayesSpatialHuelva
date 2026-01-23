@@ -73,7 +73,7 @@ matern32_cov <- function(D, sigma2, rho) {
 }
 
 # ----------------------------------------------------------------------------
-# 1) Paths
+# 1) Paths (use paths_simulated.R)
 # ----------------------------------------------------------------------------
 path_bdry <- PATHS$boundaries
 path_pts  <- PATHS$samples
