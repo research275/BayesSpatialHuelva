@@ -27,19 +27,19 @@ source(here::here("config", "paths.R"))
 check_input_files()
 create_output_dirs()
 
-crs_utm <- 25829  # ETRS89 / UTM 29N (metros)
+crs_utm <- 25829
 
 resolve_target_col <- function(nms) {
   cand <- c("Cu_ppm", "Cu__ppm_", "Cu (ppm)")
   hit <- cand[cand %in% nms]
-  if (length(hit) == 0) stop("No encuentro columna de Cu (Cu_ppm / Cu__ppm_ / 'Cu (ppm)')")
+  if (length(hit) == 0) stop("Could not find Cu column (Cu_ppm / Cu__ppm_ / 'Cu (ppm)')")
   hit[1]
 }
 
 read_sf_utm <- function(path, epsg) {
   stopifnot(file.exists(path))
   x <- st_read(path, quiet = TRUE)
-  if (is.na(st_crs(x))) stop(paste0("CRS faltante en ", path))
+  if (is.na(st_crs(x))) stop(paste0("Missing CRS in ", path))
   if (st_crs(x)$epsg != epsg) x <- st_transform(x, epsg)
   x
 }
@@ -60,22 +60,20 @@ apply_scale_log1p <- function(x, scaler) {
   as.numeric((z - scaler$mu) / scaler$sd)
 }
 
-# Para resolver K^{-1} b con cholesky (R)
 chol_solve <- function(K, b) {
-  U <- chol(K)                 # U' U = K
+  U <- chol(K)
   y <- forwardsolve(t(U), b)
   x <- backsolve(U, y)
   as.numeric(x)
 }
 
-# Cov Matérn 3/2 (sigma^2 * (1 + a) exp(-a))
 matern32_cov <- function(D, sigma2, rho) {
   a <- sqrt(3) * D / rho
   sigma2 * (1 + a) * exp(-a)
 }
 
 # ----------------------------------------------------------------------------
-# 1) Paths (using paths_simulated.R)
+# 1) Paths
 # ----------------------------------------------------------------------------
 path_bdry <- PATHS$boundaries
 path_pts  <- PATHS$samples
@@ -104,7 +102,7 @@ path_grid_cov <- list(
 )
 
 # ----------------------------------------------------------------------------
-# 2) Read data (UTM)
+# 2) Read data
 # ----------------------------------------------------------------------------
 andalucia_huelva <- read_sf_utm(path_bdry, crs_utm)
 datos_huelva     <- read_sf_utm(path_pts,  crs_utm) |> st_zm()
@@ -116,6 +114,9 @@ grid_cov     <- lapply(path_grid_cov, read_sf_utm, epsg = crs_utm)
 coords_obs  <- st_coordinates(datos_huelva)
 coords_pred <- st_coordinates(grid_huelva)
 
+# ----------------------------------------------------------------------------
+# 3) Distance to land use + nearest land-use classification
+# ----------------------------------------------------------------------------
 for (nm in names(muestras_cov)) {
   datos_huelva[[paste0("Distancia_", nm)]] <- min_dist_to(datos_huelva, muestras_cov[[nm]])
 }
@@ -128,7 +129,7 @@ classes <- c("Industria","Marsh","Phospho","Urban","Agric","Refineria","Bare","P
 expected_m <- paste0("Distancia_", classes)
 present_m  <- intersect(expected_m, names(datos_huelva))
 present_g  <- intersect(classes, names(grid_huelva))
-if (!length(present_m) || !length(present_g)) stop("No hay columnas de distancia presentes.")
+if (!length(present_m) || !length(present_g)) stop("No distance columns present.")
 
 D_m <- as.data.frame(st_drop_geometry(datos_huelva[, present_m, drop = FALSE]))
 classes_use_m <- sub("^Distancia_", "", present_m)
@@ -143,6 +144,9 @@ grid_huelva$clasificacion <- factor(classes_use_g[idx_g], levels = classes)
 
 classes_cov <- intersect(classes_use_m, classes_use_g)
 
+# ----------------------------------------------------------------------------
+# 4) Build covariates
+# ----------------------------------------------------------------------------
 scalers <- list()
 for (nm in classes_cov) {
   x_train <- st_drop_geometry(datos_huelva)[[paste0("Distancia_", nm)]]
@@ -177,7 +181,7 @@ cat("N obs =", N, " | P =", P, " | N pred =", Npred, "\n")
 cat("Covariables:", paste(colnames(X_obs), collapse = ", "), "\n")
 
 # ----------------------------------------------------------------------------
-#  INLA / SPDE (Matérn)
+# 5) (1) INLA / SPDE (Matérn)
 # ----------------------------------------------------------------------------
 cat("\n========== INLA/SPDE ==========\n")
 
@@ -186,7 +190,6 @@ huelva.bdry <- andalucia_huelva |>
   as("Spatial") |>
   inla.sp2segment()
 
-# Mesh (ajusta si quieres)
 mesh_huelva <- inla.mesh.2d(
   boundary = huelva.bdry,
   max.edge = c(1000, 4000),
@@ -222,7 +225,6 @@ stk_pred <- inla.stack(
 
 stk <- inla.stack(stk_obs, stk_pred)
 
-# Fórmula explícita
 covar_terms <- colnames(X_obs_df)  # Intercept + d_*
 rhs <- paste(c("0", covar_terms, "f(s, model = spde)"), collapse = " + ")
 formula_inla <- as.formula(paste("y ~", rhs))
@@ -241,7 +243,6 @@ t1 <- Sys.time()
 time_inla <- as.numeric(difftime(t1, t0, units = "secs"))
 cat("INLA time (s):", time_inla, "\n")
 
-# Predicciones en grilla (en escala log)
 idx_pred_inla <- inla.stack.index(stk, "pred")$data
 mu_pred_inla_mean <- fit_inla$summary.fitted.values[idx_pred_inla, "mean"]
 mu_pred_inla_sd   <- fit_inla$summary.fitted.values[idx_pred_inla, "sd"]
@@ -250,7 +251,6 @@ mu_pred_inla_q975 <- fit_inla$summary.fitted.values[idx_pred_inla, "0.975quant"]
 
 fit_inla$summary.fixed
 
-# Transformación a escala Cu (ppm) usando expm1
 cu_pred_inla_mean <- expm1(mu_pred_inla_mean)
 cu_pred_inla_q025 <- expm1(mu_pred_inla_q025)
 cu_pred_inla_q975 <- expm1(mu_pred_inla_q975)
@@ -261,7 +261,6 @@ grid_huelva$cu_inla_mean <- cu_pred_inla_mean
 grid_huelva$cu_inla_q025 <- cu_pred_inla_q025
 grid_huelva$cu_inla_q975 <- cu_pred_inla_q975
 
-# Resumen posterior parámetros INLA
 cat("\nINLA fixed effects:\n")
 print(fit_inla$summary.fixed)
 
@@ -275,7 +274,6 @@ D_obs <- as.matrix(dist(coords_obs))
 maxD <- max(D_obs)
 minD <- quantile(D_obs[D_obs > 0], probs = 0.05)
 
-# Heurística para phi (decay): phi in [3/maxD, 3/minD]
 phi_lower <- 3 / maxD
 phi_upper <- 3 / minD
 if (!is.finite(phi_upper) || phi_upper <= phi_lower) phi_upper <- phi_lower * 50
@@ -301,17 +299,14 @@ tuning_sp <- list(
   sigma.sq = 0.1,
   tau.sq   = 0.1,
   phi      = 0.1
-  # NO nu
 )
 
 
-# MCMC settings
 n_samples <- 12000
 burn_frac <- 0.50
 thin      <- 6
 
 dat_sp <- cbind.data.frame(y = y_obs, as.data.frame(X_obs))
-# Formula: y ~ 0 + Intercept + d_...
 rhs_sp <- paste(colnames(X_obs), collapse = " + ")
 form_sp <- as.formula(paste0("y ~ 0 + ", rhs_sp))
 priors_sp$nu.Unif <- c(0.5, 2.0)
@@ -358,6 +353,8 @@ t1 <- Sys.time()
 time_mcmc <- as.numeric(difftime(t1, t0, units = "secs"))
 cat("MCMC time (s):", time_mcmc, "\n")
 
+# Posterior predictive samples para y_pred (escala log)
+# p.y.predictive.samples: (n_pred x n_draws)
 y_pred_mcmc_samps <- pred_sp$p.y.predictive.samples
 mu_pred_mcmc_mean <- rowMeans(y_pred_mcmc_samps, na.rm = TRUE)
 mu_pred_mcmc_sd   <- apply(y_pred_mcmc_samps, 1, sd, na.rm = TRUE)
@@ -379,7 +376,7 @@ cat("\nMCMC posterior theta (mean, sd, q025, q975):\n")
 print(t(apply(theta_samps, 2, function(v) c(mean=mean(v), sd=sd(v), q025=quantile(v,0.025), q975=quantile(v,0.975)))))
 
 # ----------------------------------------------------------------------------
-# Variational Bayes 
+# 7) (3) Variational Bayes con Stan (GP Matérn 3/2 completo, N x N) + predicción en R
 # ----------------------------------------------------------------------------
 cat("\n========== VB (Stan ADVI) ==========\n")
 
@@ -454,6 +451,7 @@ t1 <- Sys.time()
 time_vb <- as.numeric(difftime(t1, t0, units = "secs"))
 cat("VB time (s):", time_vb, "\n")
 
+# Extraer draws VB
 post <- rstan::extract(fit_vb, pars = c("beta", "sigma", "rho", "tau"))
 beta_draws  <- post$beta
 sigma_draws <- post$sigma
@@ -471,7 +469,7 @@ print(rbind(
 cat("\nVB beta posterior (column-wise):\n")
 print(t(apply(beta_draws, 2, summ_vec)))
 
-D_pn <- fields::rdist(coords_pred, coords_obs)  # Npred x N
+D_pn <- fields::rdist(coords_pred, coords_obs)
 
 chunk_size <- 5000
 chunks <- split(1:Npred, ceiling(seq_len(Npred) / chunk_size))
@@ -520,12 +518,18 @@ grid_huelva$cu_vb_mean <- expm1(mu_pred_vb_mean)
 grid_huelva$cu_vb_q025 <- expm1(mu_pred_vb_q025)
 grid_huelva$cu_vb_q975 <- expm1(mu_pred_vb_q975)
 
+# ----------------------------------------------------------------------------
+# 8) Summary table and plots
+# ----------------------------------------------------------------------------
 summary_times <- data.frame(
   metodo = c("INLA", "MCMC", "VB"),
   tiempo_s = c(time_inla, time_mcmc, time_vb)
 )
 print(summary_times)
 
+# ----------------------------------------------------------------------------
+# 9) Maps: predicted Cu (mean) by method
+# ----------------------------------------------------------------------------
 make_map <- function(sf_grid, var, title, subtitle) {
   ggplot(sf_grid, aes(x = X, y = Y, fill = .data[[var]])) +
     geom_tile() +
@@ -541,8 +545,6 @@ make_map <- function(sf_grid, var, title, subtitle) {
     )
 }
 
-# Asegurar columnas X,Y en grid_huelva (si el sf no las trae como columnas)
-# (Si X,Y ya existen, no hace nada)
 if (!("X" %in% names(grid_huelva)) || !("Y" %in% names(grid_huelva))) {
   xy <- st_coordinates(grid_huelva)
   grid_huelva$X <- xy[,1]
@@ -555,13 +557,28 @@ p_vb   <- make_map(grid_huelva, "cu_vb_mean",   "Cu (ppm) – Predicción", "VB 
 
 plot_grid(p_inla, p_mcmc, p_vb, ncol = 3)
 
-cat("\nListo: grid_huelva contiene predicciones por método (mu_* y cu_*).\n")
-cat("mu_* está en escala log (log1p(Cu)); cu_* está en escala Cu (ppm).\n")
+# ----------------------------------------------------------------------------
+# 10) Export
+# ----------------------------------------------------------------------------
+# st_write(grid_huelva, here::here("outputs", "huelva_predictions.gpkg"), delete_dsn = TRUE)
+# saveRDS(list(fit_inla=fit_inla, fit_sp=fit_sp_rec, fit_vb=fit_vb, grid=grid_huelva), "huelva_fits_and_preds.rds")
 
+cat("\nDone: grid_huelva contains predictions by method (mu_* and cu_*).\n")
+cat("mu_* is in log scale (log1p(Cu)); cu_* is in Cu (ppm) scale.\n")
+
+
+
+# ============================================================
+# Posterior of fixed parameters (Intercept + betas)
+# Methods: INLA, MCMC (spBayes), VB (Stan)
+# ============================================================
 
 library(dplyr)
 library(tidyr)
 
+# ------------------------
+# Helper: posterior summary
+# ------------------------
 summ_vec <- function(v) {
   v <- as.numeric(v)
   v <- v[is.finite(v)]
@@ -574,6 +591,9 @@ summ_vec <- function(v) {
   )
 }
 
+# ============================================================
+# 1) INLA – fixed parameters
+# ============================================================
 
 df_inla_fixed <- fit_inla$summary.fixed %>%
   as.data.frame() %>%
@@ -588,10 +608,12 @@ df_inla_fixed <- fit_inla$summary.fixed %>%
     q975  = `0.975quant`
   )
 
-
+# ============================================================
+# 2) MCMC – spBayes (betas)
+# ============================================================
 
 beta_mcmc <- fit_sp_rec$p.beta.recover.samples
-colnames(beta_mcmc) <- colnames(X_obs)   # asegurar nombres correctos
+colnames(beta_mcmc) <- colnames(X_obs)
 
 df_mcmc_fixed <- t(apply(beta_mcmc, 2, summ_vec)) %>%
   as.data.frame() %>%
@@ -599,7 +621,9 @@ df_mcmc_fixed <- t(apply(beta_mcmc, 2, summ_vec)) %>%
   mutate(metodo = "MCMC") %>%
   select(metodo, param, everything())
 
-
+# ============================================================
+# 3) VB – Stan (betas)
+# ============================================================
 post_vb <- rstan::extract(fit_vb, pars = "beta")
 
 beta_vb <- post_vb$beta   # (S x P)
@@ -611,7 +635,9 @@ df_vb_fixed <- t(apply(beta_vb, 2, summ_vec)) %>%
   mutate(metodo = "VB") %>%
   select(metodo, param, everything())
 
-
+# ============================================================
+# 4) Unified table (long format)
+# ============================================================
 post_fixed_all <- bind_rows(
   df_inla_fixed,
   df_mcmc_fixed,
@@ -621,7 +647,9 @@ post_fixed_all <- bind_rows(
 
 post_fixed_all
 
-
+# ============================================================
+# 5) Wide table for quick comparison
+# ============================================================
 post_fixed_wide <- post_fixed_all %>%
   pivot_wider(
     names_from  = metodo,
@@ -634,6 +662,10 @@ print(post_fixed_wide, n = 200)
 
 
 
+
+# ============================================================
+# Extract and summarize spatial HYPERPARAMETERS (INLA / MCMC / VB)
+# ============================================================
 
 library(dplyr)
 library(tidyr)
@@ -650,6 +682,9 @@ summ_vec <- function(v) {
   )
 }
 
+# -----------------------------
+# 1) INLA: hyperparameters
+# -----------------------------
 inla_hyp <- fit_inla$summary.hyperpar %>%
   as.data.frame() %>%
   tibble::rownames_to_column("param") %>%
@@ -667,7 +702,9 @@ inla_hyp <- fit_inla$summary.hyperpar %>%
 inla_hyp$tipo <- ifelse(grepl("Range|Stdev|Sigma|kappa|tau|s$", inla_hyp$param, ignore.case = TRUE),
                         "spatial", "other")
 
-
+# -----------------------------
+# 2) MCMC (spBayes): theta samples
+# -----------------------------
 theta_mcmc <- fit_sp_rec$p.theta.recover.samples
 stopifnot(!is.null(theta_mcmc))
 
@@ -680,11 +717,13 @@ df_mcmc_theta <- t(apply(theta_mcmc, 2, summ_vec)) %>%
   ) %>%
   select(metodo, tipo, param, everything())
 
-
 if (is.null(colnames(theta_mcmc))) {
   colnames(theta_mcmc) <- c("sigma.sq", "tau.sq", "phi", "nu")[1:ncol(theta_mcmc)]
 }
 
+# -----------------------------
+# 3) VB (Stan): sigma, rho, tau
+# -----------------------------
 post_vb_h <- rstan::extract(fit_vb, pars = c("sigma","rho","tau"))
 
 df_vb_hyp <- bind_rows(
@@ -694,6 +733,9 @@ df_vb_hyp <- bind_rows(
 ) %>%
   select(metodo, tipo, param, mean, sd, q025, q50, q975)
 
+# -----------------------------
+# 4) Join all
+# -----------------------------
 post_hyper_all <- bind_rows(
   inla_hyp,
   df_mcmc_theta,
@@ -703,7 +745,9 @@ post_hyper_all <- bind_rows(
 
 print(post_hyper_all, n = 200)
 
-
+# -----------------------------
+# 5) Wide table for comparison
+# -----------------------------
 post_hyper_wide <- post_hyper_all %>%
   select(metodo, param, mean, sd, q025, q50, q975) %>%
   pivot_wider(
@@ -715,6 +759,7 @@ post_hyper_wide <- post_hyper_all %>%
 
 print(post_hyper_wide, n = 200)
 
+# write.csv(post_hyper_wide, "post_hyper_wide.csv", row.names = FALSE)
 
 
 
@@ -790,4 +835,3 @@ ggsave(
   height   = 5,
   dpi      = 300
 )
-
